@@ -175,6 +175,7 @@ fit <-
   )
 
 coefs <- coef(fit)
+
 data %>% 
   # rename(t = temp) %>%
   ggplot(aes(temp_f, cvn_ss_ft_lbs)) +

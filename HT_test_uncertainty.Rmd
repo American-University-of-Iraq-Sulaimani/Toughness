@@ -11,54 +11,89 @@ knitr::opts_chunk$set( message = FALSE, warning = FALSE)
 
 
 ```{r data}
-
 library(readxl)
 library(tidyverse)
+library(zoo)
+
 
 # Read data in
 tim_cvn <-
   read_excel(
-    "MasterDB-SQL-2020-09-24.xlsx",
+    "timp_met_charpy_clean_rev02.xlsx",
     sheet = "Charpy"
-  ) %>% janitor::clean_names() %>%
-  filter(full_transition_curve=="TRUE") %>%
-  select(feature,
-         temperature_f,
-         absorbed_energy_ft_lbs) %>%
-  rename(t = temperature_f,
-         cvn = absorbed_energy_ft_lbs,
-         id = feature)
+  ) %>% 
+  janitor::clean_names() %>%
+   rename(
+    location = specimen_location,
+    temp_f = test_temperature_f,
+    charpy_thickness_mm = specimen_thickness_mm,
+    cvn_ss_ft_lbs = measured_energy_absorbed_ft_lbs,
+    sa_ss = shear_area_percent
+  ) %>%
+  mutate(across(temp_f:sa_ss, as.numeric), 
+         sa_ss = as.numeric(str_remove(string = sa_ss,pattern = c("<", ">")))) %>%
+  filter(str_detect(location, "Base Metal"),   #removing weld tests
+        str_detect(single_or_multiple_temperature_test, "Multiple"), #remove single temp tests
+        str_detect(full_transition_curve, "Yes"),
+         sa_ss<=100) %>% #removing shear areas greater than 100
+  select(id, bar_orientation, charpy_thickness_mm, temp_f, cvn_ss_ft_lbs, sa_ss)
+ 
+#list of id that max is less than 90%
+idlist <- tim_cvn %>% 
+  group_by(id) %>% 
+  summarise(mx_sa=max(sa_ss)) %>% 
+  filter(mx_sa<90)
 
-ids <- unique(tim_cvn$id) #create vector of ids
+temp_id_list <- tim_cvn %>% 
+  group_by(id, temp_f) %>% 
+  summarise(unique(temp_f)) %>% 
+  mutate(count = n()) %>% 
+  filter(count<4)
 
 `%notin%` <- Negate(`%in%`) # not in special function
 
+tim_cvn <- tim_cvn %>% 
+  filter(id %notin% idlist$id,
+         id %notin% temp_id_list$id)
+
+ids <- unique(tim_cvn$id) #create vector of ids
+
+
+
 # hyperbolic tangent function
-func <- function(t, A, B, C, D) {
-  A + B * tanh((t - D) / C)
+func <- function(temp_f, A, B, C, D) {
+  A + B * tanh((temp_f - D) / C)
 }
 
 ## played around with A,B,C,D so that the function was
 ## close for first few data points
 ## then used this as starting points for nls
-Ai <- 19
-Bi <- 13
-Ci <- 30
-Di <- 89
+# USE = max(data$cvn_ss_ft_lbs) #UPPER SHELF ENERGY
+# USE
+# LSE = min(data$cvn_ss_ft_lbs)
+# LSE
+# Ai <- (USE + LSE)/2
+# Bi <- (USE - LSE)/2
+# Ci <- data %>% filter(slope == max(slope, na.rm = TRUE)) %>% 
+#   mutate(bc = Bi/slope)
+# Ci = Ci$bc
+# Di <- data %>% filter(slope == max(slope, na.rm = TRUE)) %>% 
+#   select(mean_t)
+# Di = Di$mean_t
 
 
 make_plot <- function(id) {
   tim_cvn %>%
     filter(.data$id == .env$id) %>%
-    ggplot(aes(t, cvn)) +
+    ggplot(aes(temp_f, cvn_ss_ft_lbs)) +
     geom_point() +
     stat_function(fun = func,
                   args = list(Ai, Bi, Ci, Di)) +
     theme_minimal() +
     annotate(
       "text",
-      x = min(data$t)+5,
-      y = max(data$cvn)-5,
+      x = min(data$temp_f)+5,
+      y = max(data$cvn_ss_ft_lbs)-5,
       label = paste("A =", Ai,
                     ",B =", Bi,
                     ",C =", Ci,
@@ -69,44 +104,10 @@ make_plot <- function(id) {
 }
 
 
-make_plot2 <- function(id) {
-  tim_cvn %>%
-    filter(.data$id == .env$id) %>%
-    ggplot(aes(t, cvn)) +
-    stat_function(fun = func,
-                  args = list(Ai, Bi, Ci, Di),
-                  col = 'blue') +
-    geom_point(col = 'maroon2') +
-    theme_minimal() +
-    annotate(
-      "text",
-      x = min(data$t) + 5,
-      y = max(data$cvn) - 5,
-      label = paste(
-        "A =",
-        round(coefs[1], 1),
-        ",B =",
-        round(coefs[2], 1),
-        ",C =",
-        round(coefs[3], 1),
-        ",D =",
-        round(coefs[4], 1)
-      ),
-      hjust = 0
-    ) +
-    geom_point(data, inherit.aes = F,aes(t, .pred), col = '#00FF7F') +
-    labs(title = paste("ID =", ids[idx])) +
-    geom_errorbar(data, inherit.aes = F, aes(
-      ymin = .pred - 1. * abs(err$sigma),
-      ymax = .pred + 1. * abs(err$sigma)
-    ),
-    col = 'grey50')
-}
-
 ```
 
 ## All the data considered
-ID = H-08 trial
+
 
 ```{r plot_1, fig.cap="Figure 1, Plot 1 - all data"}
 idx <- 2 #iterate index by 1
